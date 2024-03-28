@@ -160,6 +160,18 @@ namespace Authentication_Playground_.Controllers
             if (AuthCode == totpCode)
             {
                 Users user = await _dbContext.Users.Where(s => s.Username == HttpContext.Session.GetString("Username")).FirstOrDefaultAsync();
+
+                //If user has MFA secret in the database, this request is going to override it.
+                //We do not want this, MFA secrets cannot be simply overriden. This request is either malicious-
+                //or buggy(For instance, if user has two active sessions, and try to set the secret-
+                //at the same time.
+                //MFA reset process should be complex and cannot be done easily.
+                if (user.MFASecret != null)
+                {
+                    Response.StatusCode = 500;
+                    return Redirect("~/Account/Management");
+                }
+
                 user.MFASecret = secret.ToString();
                 await _dbContext.SaveChangesAsync();
 
