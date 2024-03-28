@@ -11,6 +11,7 @@ namespace Authentication_Playground_.Models
         public string Username { get; set; }
         [Required]
         public string Password { get; set; }
+        public string? MFASecret { get; set; }
 
     }
 }

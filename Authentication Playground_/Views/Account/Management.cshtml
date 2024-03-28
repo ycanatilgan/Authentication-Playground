@@ -1,0 +1,68 @@
+﻿@{
+    ViewData["Title"] = "User Management";
+    string username = @Context.Session.GetString("Username");
+}
+
+@model string?
+
+<h1>@ViewData["Title"]</h1>
+
+@if (!string.IsNullOrEmpty(ViewBag.MFAError))
+{
+    if (ViewBag.MFAError == "WrongCode")
+    {
+        <div class="alert alert-info w-100" role="alert">
+            Wrong Code! Please try again!
+        </div>
+    }
+}
+
+<div class="row g-4">
+    @if (!string.IsNullOrEmpty(Model))
+    {
+        <div class="col-xl-3 col-lg-6 col-md-12">
+            <h4 class="mb-1 pt-2 text-center">Activate two factor authentication</h4>
+            <p class="text-center">
+                <span>Scan the QR Code to your OTP App</span>
+            </p>
+            <script src="~/lib/qrcode/qrcode.js"></script>
+            <div id="qrcode-container" class="text-center ms-3">
+                <div id="qrcode"></div>
+            </div>
+            <script type="text/javascript">
+                new QRCode(document.getElementById("qrcode"),
+                    'otpauth://totp/@username?secret=@Model&issuer=ycanindev.com');
+            </script>
+            <br />
+            <p class="text-center">
+                <span>or enter the code manually</span>
+            </p>
+
+            <p class="text-center">
+                <span class="text-muted">@Model</span>
+            </p>
+
+            <div class="my-4 text-center">
+                <div class="divider-text">then</div>
+            </div>
+            <p class="text-center text-center">
+                <span>Enter the pin that your app creates</span>
+            </p>
+            <form id="twoStepsForm" action="/Account/RegisterMFASecret" method="POST">
+                <div class="mb-3">
+                    <div class="auth-input-wrapper numeral-mask-wrapper">
+                        <input type="tel"
+                               class="form-control auth-input h-px-50 numeral-mask mx-1 my-2 text-center"
+                               maxlength="6"
+                               name="AuthCode"/>
+                    </div>
+                </div>
+                <button class="btn btn-primary d-grid w-100 mb-3 text-center">Send</button>
+            </form>
+        </div>
+    }
+    else
+    {
+        <h4 class="mb-1 pt-2 text-center">You already enabled 2-Factor Authentication, Great!</h4>
+    }
+</div>
