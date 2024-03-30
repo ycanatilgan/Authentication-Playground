@@ -1,10 +1,9 @@
 using Authentication_Playground_.Data;
 using Authentication_Playground_.Models;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using OtpNet;
-using System.Diagnostics;
-using static System.Net.WebRequestMethods;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Authentication_Playground_.Controllers
 {
@@ -13,9 +12,16 @@ namespace Authentication_Playground_.Controllers
         //For the tutorial, refer to http://ycanindev.com 
         AppDbContext _dbContext;
 
+        private readonly byte[] key;
+
         public AccountController(AppDbContext dbContext) 
         { 
             _dbContext = dbContext;
+
+            //REPLACE THIS KEY WITH YOUR OWN KEY DO NOT USE THE SAME!!!!!!!!!!!!!
+            //This will be used to encrypt the mfa secret in the database
+            //YOU CAN CREATE A RANDOM 32 byte key here: https://www.avast.com/random-password-generator
+            key = Encoding.UTF8.GetBytes("pKjvjST5-oC+nDrz?sghX5GHo-cl4Obn");
         }
 
         //Register page
@@ -40,12 +46,12 @@ namespace Authentication_Playground_.Controllers
         public IActionResult Management()
         {
             //If no username exists in the session, then it is unauthorized attempt, redirect to login page
-            if (HttpContext.Session.GetString("Username") != null)
+            if (HttpContext.Session.GetString("UserId") != null)
             {
                 //If user has MFA secret in the DB, do not create a secret and do not send to the view
                 //Thus the view will show users already have MFA enabled
                 if (_dbContext.Users
-                    .Where(s => s.Username == HttpContext.Session.GetString("Username") && s.MFASecret == null)
+                    .Where(s => s.Id == HttpContext.Session.GetInt32("UserId") && s.MFASecret == null)
                     .Any())
                 {
                     //Remove older created MFA secrets in any case
@@ -81,9 +87,9 @@ namespace Authentication_Playground_.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> LoginUser(string username, string password)
+        public IActionResult LoginUser(string username, string password)
         {
-            Users? user = await _dbContext.Users.Where(s => s.Username == username).FirstOrDefaultAsync();
+            Users? user = _dbContext.Users.Where(s => s.Username == username).FirstOrDefault();
 
             //Check if username exists in db
             if (user == null) 
@@ -106,11 +112,12 @@ namespace Authentication_Playground_.Controllers
                     //side. You can give them a special session value that confirms they have entered-
                     //their password correctly and can login only by entering their 2-step code
                     //You can find more info in: http://ycanindev.com
-                    HttpContext.Session.SetString("OTPUsername", user.Username);
+                    HttpContext.Session.SetInt32("OTPUserId", user.Id);
                     return View("MFAVerification");
                 }
 
                 HttpContext.Session.SetString("Username", user.Username);
+                HttpContext.Session.SetInt32("UserId", user.Id);
                 return Redirect("~/Home/Index");
             }
             else
@@ -122,7 +129,7 @@ namespace Authentication_Playground_.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> RegisterUser(string username, string password)
+        public IActionResult RegisterUser(string username, string password)
         {
             //WARNING! NEVER DEPLOY THIS INTO PRODUCTION, THIS IS FOR A QUICK SHOWCASE,
             //YOU SHOULD ALWAYS HASH PASSWORDS, THEN SAVE INTO DB
@@ -132,14 +139,17 @@ namespace Authentication_Playground_.Controllers
                 Password = password
             };
 
+            _dbContext.Users.Add(newUser);
+            _dbContext.SaveChanges();
+
             HttpContext.Session.SetString("Username", username);
-            await _dbContext.Users.AddAsync(newUser);
-            await _dbContext.SaveChangesAsync();
+            HttpContext.Session.SetInt32("UserId", newUser.Id);
+
             return Redirect("~/Home/Index");
         }
 
         [HttpPost]
-        public async Task<IActionResult> RegisterMFASecret(string AuthCode)
+        public IActionResult RegisterMFASecret(string AuthCode)
         {
             //Get the MFA secret you created on the User Management Page
             var secret = TempData["MFASecret"];
@@ -159,7 +169,7 @@ namespace Authentication_Playground_.Controllers
             //can update the user with the secret
             if (AuthCode == totpCode)
             {
-                Users user = await _dbContext.Users.Where(s => s.Username == HttpContext.Session.GetString("Username")).FirstOrDefaultAsync();
+                Users user = _dbContext.Users.Where(s => s.Id == HttpContext.Session.GetInt32("UserId")).FirstOrDefault();
 
                 //If user has MFA secret in the database, this request is going to override it.
                 //We do not want this, MFA secrets cannot be simply overriden. This request is either malicious-
@@ -172,8 +182,10 @@ namespace Authentication_Playground_.Controllers
                     return Redirect("~/Account/Management");
                 }
 
-                user.MFASecret = secret.ToString();
-                await _dbContext.SaveChangesAsync();
+                //Store the MFA Secret encrypted, I prefer to use AES
+                //You can store in various ways, detail in the tutorial: http://ycanindev.com
+                user.MFASecret = Encrypt(secret.ToString());
+                _dbContext.SaveChanges();
 
                 TempData.Remove("MFASecret");
                 return View("Management", null);
@@ -186,22 +198,33 @@ namespace Authentication_Playground_.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> VerifyMFA(string AuthCode)
+        public IActionResult VerifyMFA(string AuthCode)
         {
             //Check the special session value to understand if user is entered their password correctly-
             //and redirected to the MFA page.
-            var username = HttpContext.Session.GetString("OTPUsername");
-            if (username != null)
+            var UserId = HttpContext.Session.GetInt32("OTPUserId");
+            if (UserId != null)
             {
                 //Get the secret from database, and compute the correct otp code to see if it matches
-                string secret = await _dbContext.Users.Where(s => s.Username == username).Select(s => s.MFASecret).FirstOrDefaultAsync();
+                var user = _dbContext.Users.Where(s => s.Id == UserId).FirstOrDefault();
+
+                if(user == null || user.MFASecret == null)
+                {
+                    Response.StatusCode = 500;
+                    return Redirect("Login");
+                }
+
+                //Decrypt to get the true secret
+                string secret = Decrypt(user.MFASecret);
+
                 var totp = new Totp(Base32Encoding.ToBytes(secret.ToString()));
                 var totpCode = totp.ComputeTotp(DateTime.UtcNow.AddSeconds(-1));
 
                 if (AuthCode == totpCode)
                 {
-                    HttpContext.Session.Remove("OTPUsername");
-                    HttpContext.Session.SetString("Username", username);
+                    HttpContext.Session.Remove("OTPUserId");
+                    HttpContext.Session.SetString("Username", user.Username);
+                    HttpContext.Session.SetInt32("UserId", user.Id);
                     return Redirect("~/Home/Index");
                 }
                 else
@@ -214,6 +237,72 @@ namespace Authentication_Playground_.Controllers
             {
                 Response.StatusCode = 401;
                 return Redirect("Login");
+            }
+        }
+
+        string Encrypt(string input)
+        {
+            using (Aes aes = Aes.Create())
+            {
+                //Create IV to give uniquness to each entity
+                //More detail in the tutorial http://ycanindev.com
+
+                byte[] randomBytes = new byte[16];
+                new Random().NextBytes(randomBytes);
+                byte[] iv = randomBytes;
+
+                aes.Key = key;
+                aes.IV = iv;
+
+                ICryptoTransform encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
+
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    using (CryptoStream cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
+                    {
+                        using (StreamWriter sw = new StreamWriter(cs))
+                        {
+                            sw.Write(input);
+                        }
+                    }
+
+                    //I prefer to add a prefix ("enc:" here)  to understand if data is encrypted or not in a simple way.
+                    //Add iv in plain text and split it by encrypted data, the decrypt method will further understand-
+                    //this structure and proccesses accordingly.
+                    return "enc:" + Convert.ToBase64String(iv) + ":::" + Convert.ToBase64String(ms.ToArray());
+                }
+            }
+        }
+
+        string Decrypt(string input)
+        {
+            //Check if data is encrypted
+            //You can handle this error in your own way, I'll just throw an exception to stop the process.
+            if (string.IsNullOrEmpty(input) || !input.StartsWith("enc:"))
+                throw new Exception("The input isn't encrypted");
+
+            using (Aes aes = Aes.Create())
+            {
+                //Strip off the "enc:" prefix
+                input = input.Substring(4);
+                var parts = input.Split(":::");
+
+                //Split the IV and the encrypted value
+                aes.Key = key;
+                aes.IV = Convert.FromBase64String(parts[0]);
+
+                ICryptoTransform decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
+
+                using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(parts[1])))
+                {
+                    using (CryptoStream cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
+                    {
+                        using (StreamReader sr = new StreamReader(cs))
+                        {
+                            return sr.ReadToEnd();
+                        }
+                    }
+                }
             }
         }
     }
