@@ -124,8 +124,7 @@ namespace Authentication_Playground_.Controllers
             {
                 ViewBag.CredentialError = "Password";
                 return View("Login");
-            }
-            
+            }           
         }
 
         [HttpPost]
@@ -156,7 +155,7 @@ namespace Authentication_Playground_.Controllers
 
             if (secret == null)
             {
-                Response.StatusCode = 500;
+                Response.StatusCode = 400;
                 return Redirect("~/Account/Management");
             }
 
@@ -178,7 +177,7 @@ namespace Authentication_Playground_.Controllers
                 //MFA reset process should be complex and cannot be done easily.
                 if (user.MFASecret != null)
                 {
-                    Response.StatusCode = 500;
+                    Response.StatusCode = 400;
                     return Redirect("~/Account/Management");
                 }
 
@@ -210,7 +209,7 @@ namespace Authentication_Playground_.Controllers
 
                 if(user == null || user.MFASecret == null)
                 {
-                    Response.StatusCode = 500;
+                    Response.StatusCode = 400;
                     return Redirect("Login");
                 }
 
@@ -240,7 +239,7 @@ namespace Authentication_Playground_.Controllers
             }
         }
 
-        string Encrypt(string input)
+        private string Encrypt(string input)
         {
             using (Aes aes = Aes.Create())
             {
@@ -274,7 +273,7 @@ namespace Authentication_Playground_.Controllers
             }
         }
 
-        string Decrypt(string input)
+        private string Decrypt(string input)
         {
             //Check if data is encrypted
             //You can handle this error in your own way, I'll just throw an exception to stop the process.
