@@ -5,16 +5,9 @@
 
 @if (!string.IsNullOrEmpty(ViewBag.CredentialError))
 {
-    if (ViewBag.CredentialError == "NotExist")
-    {
-        <div class="alert alert-info w-100" role="alert">User not found. 
-            <a href="/Account/Register">Maybe Register?</a>
-        </div>
-    }
-    else if (ViewBag.CredentialError == "Password")
-    {
-        <div class="alert alert-info w-100" role="alert">Password incorrect</div>
-    }
+    <div class="alert alert-info w-100" role="alert">
+        @ViewBag.CredentialError
+    </div>
 }
 <form asp-action="LoginUser" asp-controller="Account" method="post">
     <div class="row mb-3">

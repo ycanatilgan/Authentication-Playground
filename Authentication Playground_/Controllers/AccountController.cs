@@ -94,7 +94,7 @@ namespace Authentication_Playground_.Controllers
             //Check if username exists in db
             if (user == null) 
             {
-                ViewBag.CredentialError = "NotExist";
+                ViewBag.CredentialError = "User not found";
                 return View("Login");
             }
 
@@ -123,7 +123,7 @@ namespace Authentication_Playground_.Controllers
             }
             else
             {
-                ViewBag.CredentialError = "Password";
+                ViewBag.CredentialError = "Password isn't correct";
                 return View("Login");
             }           
         }
@@ -192,7 +192,7 @@ namespace Authentication_Playground_.Controllers
             }
             else
             {
-                ViewBag.MFAError = "WrongCode";
+                ViewBag.MFAError = "Wrong code! Try again!";
                 return View("Management", TempData["MFASecret"]);
             }           
         }
@@ -246,7 +246,7 @@ namespace Authentication_Playground_.Controllers
                         return Redirect("Login");
                     }
 
-                    ViewBag.MFAError = "WrongCode";
+                    ViewBag.MFAError = "Wrong code! Try again!";
                     HttpContext.Session.SetInt32("OTPCounter", remainingCounter);
                     return View("MFAVerification");
                 }
