@@ -113,6 +113,7 @@ namespace Authentication_Playground_.Controllers
                     //their password correctly and can login only by entering their 2-step code
                     //You can find more info in: http://ycanindev.com
                     HttpContext.Session.SetInt32("OTPUserId", user.Id);
+                    HttpContext.Session.SetInt32("OTPCounter", 3);
                     return View("MFAVerification");
                 }
 
@@ -201,8 +202,10 @@ namespace Authentication_Playground_.Controllers
         {
             //Check the special session value to understand if user is entered their password correctly-
             //and redirected to the MFA page.
+            //Also check the counter to limit the attempts, if more than 3, user will need to login back again
             var UserId = HttpContext.Session.GetInt32("OTPUserId");
-            if (UserId != null)
+            var Counter = HttpContext.Session.GetInt32("OTPCounter");
+            if (UserId != null && Counter.HasValue && Counter > 0)
             {
                 //Get the secret from database, and compute the correct otp code to see if it matches
                 var user = _dbContext.Users.Where(s => s.Id == UserId).FirstOrDefault();
@@ -222,13 +225,29 @@ namespace Authentication_Playground_.Controllers
                 if (AuthCode == totpCode)
                 {
                     HttpContext.Session.Remove("OTPUserId");
+                    HttpContext.Session.Remove("OTPCounter");
+
                     HttpContext.Session.SetString("Username", user.Username);
                     HttpContext.Session.SetInt32("UserId", user.Id);
                     return Redirect("~/Home/Index");
                 }
                 else
                 {
+                    int remainingCounter = Counter.Value - 1;
+
+                    //If user has tried 3 times and none of them was successful, direct them to the login page again, or even ban the ip
+                    if(remainingCounter <= 0)
+                    {
+                        HttpContext.Session.Remove("OTPUserId");
+                        HttpContext.Session.Remove("OTPCounter");
+
+                        ViewBag.CredentialError = "You need to login again!";
+                        Response.StatusCode = 401;
+                        return Redirect("Login");
+                    }
+
                     ViewBag.MFAError = "WrongCode";
+                    HttpContext.Session.SetInt32("OTPCounter", remainingCounter);
                     return View("MFAVerification");
                 }
             }
