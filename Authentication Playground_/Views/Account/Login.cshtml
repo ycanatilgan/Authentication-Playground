@@ -3,10 +3,10 @@
 }
 <h1>@ViewData["Title"]</h1>
 
-@if (!string.IsNullOrEmpty(ViewBag.CredentialError))
+@if (!string.IsNullOrEmpty(ViewBag.SigninMessage))
 {
     <div class="alert alert-info w-100" role="alert">
-        @ViewBag.CredentialError
+        @ViewBag.SigninMessage
     </div>
 }
 <form asp-action="LoginUser" asp-controller="Account" method="post">
@@ -17,6 +17,7 @@
                 <input name="username"
                        class="form-control flex-grow-1"
                        maxlength="50"
+                       autocomplete="webauthn"
                        required />
             </div>
         </div>
@@ -34,3 +35,198 @@
         <button type="submit" class="btn btn-success">Login</button>
     </div>
 </form>
+
+@*PASSKEYS*@
+<script type="module" async>
+
+    export async function _fetch(path, payload = '') {
+        const headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (payload && !(payload instanceof FormData)) {
+            headers['Content-Type'] = 'application/json';
+            payload = JSON.stringify(payload);
+        }
+        const res = await fetch(path, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: headers,
+            body: payload,
+        });
+        if (res.status === 200) {
+            // Server authentication succeeded
+            return res.json();
+        } else {
+            // Server authentication failed
+            const result = await res.json();
+            throw new Error(result.error);
+        }
+    };
+
+    export const base64url = {
+        encode: function (buffer) {
+            const base64 = window.btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            return base64.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        },
+        decode: function (base64url) {
+            const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+            const binStr = window.atob(base64);
+            const bin = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) {
+                bin[i] = binStr.charCodeAt(i);
+            }
+            return bin.buffer;
+        }
+    }
+
+    function base64UrlToArrayBuffer(base64url) {
+        // Replace '-' with '+' and '_' with '/' to make it compatible with base64 decoding
+        const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+
+        // Pad the string with '=' if necessary to make its length a multiple of 4
+        //const paddedBase64 = base64 + '=='.substring(0, (4 - base64.length % 4) % 4);
+
+        // Decode the base64 string
+        const binaryString = atob(base64);
+
+        // Create Uint8Array from the binary string
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // Return the ArrayBuffer
+        return bytes.buffer;
+    }
+
+    export async function authenticate() {
+
+
+        const options = await _fetch('/Fido2/SigninRequest');
+
+        options.challenge = base64UrlToArrayBuffer(options.challenge);
+        options.allowCredentials = [];
+
+        let credential;
+        try {
+            credential = await navigator.credentials.get({
+                publicKey: options,
+
+                // Request a conditional UI.
+                mediation: 'conditional'
+            });
+        } catch (err) {
+            return;
+            alert(err.message ? err.message : err);
+        }
+
+        try {
+            await verifyAssertionWithServer(credential);
+        } catch (e) {
+            alert('Could not sign in');
+        }
+    };
+
+    if (window.PublicKeyCredential &&
+        PublicKeyCredential.isConditionalMediationAvailable) {
+        try {
+
+            const cma = await PublicKeyCredential.isConditionalMediationAvailable();
+            if (cma) {
+
+                // If a conditional UI is available, invoke the authenticate() function.
+                const user = await authenticate();
+                /*if (user) {
+
+                    // Proceed only when authentication succeeds.
+                    $('#username').value = user;
+                    location.href = '/homepage';
+                } else {
+                    throw new Error('User not found.');
+                }*/
+            }
+        } catch (e) {
+
+            // A NotAllowedError indicates that the user canceled the operation.
+            if (e.name !== 'NotAllowedError') {
+
+            } else {
+                alert('An error occured during passkey process');
+            }
+        }
+    }
+
+    async function verifyAssertionWithServer(assertedCredential) {
+
+        // Move data into Arrays incase it is super long
+        let authData = new Uint8Array(assertedCredential.response.authenticatorData);
+        let clientDataJSON = new Uint8Array(assertedCredential.response.clientDataJSON);
+        let rawId = new Uint8Array(assertedCredential.rawId);
+        let sig = new Uint8Array(assertedCredential.response.signature);
+        const data = {
+            id: assertedCredential.id,
+            rawId: coerceToBase64Url(rawId),
+            type: assertedCredential.type,
+            extensions: assertedCredential.getClientExtensionResults(),
+            response: {
+                authenticatorData: coerceToBase64Url(authData),
+                clientDataJson: coerceToBase64Url(clientDataJSON),
+                signature: coerceToBase64Url(sig)
+            }
+        };
+
+        let response;
+        try {
+            let res = await fetch("/Fido2/VerifyWebAuthn", {
+                method: 'POST', // or 'PUT'
+                body: JSON.stringify(data), // data can be `string` or {object}!
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (res.ok) {
+                window.location.href = "/Home/Index";
+            }
+            else {
+                alert('An error occured during passkey process');
+            }
+        } catch (e) {
+            alert('An error occured during passkey process');
+        }
+
+    }
+
+    function coerceToBase64Url(input) {
+        // Array or ArrayBuffer to Uint8Array
+        if (Array.isArray(input)) {
+            input = Uint8Array.from(input);
+        }
+
+        if (input instanceof ArrayBuffer) {
+            input = new Uint8Array(input);
+        }
+
+        // Uint8Array to base64
+        if (input instanceof Uint8Array) {
+            var str = "";
+            var len = input.byteLength;
+
+            for (var i = 0; i < len; i++) {
+                str += String.fromCharCode(input[i]);
+            }
+            input = window.btoa(str);
+        }
+
+        if (typeof input !== "string") {
+            throw new Error("could not coerce to string");
+        }
+
+        // base64 to base64url
+        // NOTE: "=" at the end of challenge is optional, strip it off here
+        input = input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=*$/g, "");
+
+        return input;
+    }
+</script>

@@ -7,10 +7,10 @@
 
 <h1>@ViewData["Title"]</h1>
 
-@if (!string.IsNullOrEmpty(ViewBag.MFAError))
+@if (!string.IsNullOrEmpty(ViewBag.UserManagementMessage))
 {
     <div class="alert alert-info w-100" role="alert">
-        @ViewBag.MFAError
+        @ViewBag.UserManagementMessage
     </div>
 }
 
@@ -63,3 +63,236 @@
         <h4 class="mb-1 pt-2 text-center">You already enabled 2-Factor Authentication, Great!</h4>
     }
 </div>
+
+<div>
+    <p id="message" class="instructions"></p>
+    <mwc-button id="create-passkey" class="hidden btn btn-primary ms-3 mb-3" icon="fingerprint" raised>
+        Create Passkey
+    </mwc-button>
+</div>
+
+<script type="module" async>
+
+    export const base64url = {
+        encode: function (buffer) {
+            const base64 = window.btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            return base64.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        },
+        decode: function (base64url) {
+            const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+            const binStr = window.atob(base64);
+            const bin = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) {
+                bin[i] = binStr.charCodeAt(i);
+            }
+            return bin.buffer;
+        }
+    }
+
+    export async function _fetch(path, payload = '') {
+        const headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (payload && !(payload instanceof FormData)) {
+            headers['Content-Type'] = 'application/json';
+            payload = JSON.stringify(payload);
+        }
+        const res = await fetch(path, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: headers,
+            body: payload,
+        });
+        if (res.status === 200) {
+            // Server authentication succeeded
+            return res.json();
+        } else {
+            // Server authentication failed
+            const result = await res.json();
+            throw new Error(result.error);
+        }
+    };
+
+
+    const createPasskey = document.getElementById('create-passkey');
+
+    createPasskey.addEventListener('click', registerCredential);
+
+    // Feature detections
+    if (window.PublicKeyCredential &&
+        PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable &&
+        PublicKeyCredential.isConditionalMediationAvailable) {
+        try {
+            const results = await Promise.all([
+
+                // Is platform authenticator available in this browser?
+                PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(),
+
+                // Is conditional UI available in this browser?
+                PublicKeyCredential.isConditionalMediationAvailable()
+            ]);
+            if (results.every(r => r === true)) {
+
+                // If conditional UI is available, reveal the Create a passkey button.
+                createPasskey.classList.remove('hidden');
+            } else {
+
+                // If conditional UI isn't available, show a message.
+                document.getElementById('message').textContent = 'This device does not support passkeys';
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    } else {
+
+        // If WebAuthn isn't available, show a message.
+        document.getElementById('message').textContent = 'This device does not support passkeys';
+    }
+
+    export async function registerCredential() {
+
+        try {
+            // TODO: Add an ability to create a passkey: Obtain the challenge and other options from the server endpoint.
+            const options = await _fetch('/Fido2/RegisterRequest');
+            //console.log(options);
+            // TODO: Add an ability to create a passkey: Create a credential.
+
+            if (options.excludeCredentials) {
+                for (let cred of options.excludeCredentials) {
+                    cred.id = base64url.decode(cred.id);
+                }
+            }
+            options.authenticatorSelection = {
+                authenticatorAttachment: 'platform',
+                requireResidentKey: true
+            }
+
+            options.challenge = base64url.decode(options.challenge);
+            options.user.id = base64url.decode(options.user.id);
+
+            let newCredential;
+            try {
+                newCredential = await navigator.credentials.create({
+                    publicKey: options
+                });
+            } catch (e) {
+                var msg = "Could not create credentials in browser. Probably because the username is already registered with your authenticator. Please change username or authenticator."
+                //console.error(msg, e);
+                alert(msg);
+            }
+
+            try {
+                registerNewCredential(newCredential);
+
+            } catch (e) {
+                alert("Could not create passkey");
+            }
+        }
+        catch (e) {
+
+            if (e.name === 'InvalidStateError') {
+                alert("This device already has passkey for this service");
+
+
+            } else if (e.name === 'NotAllowedError') {
+                return;
+
+            } else {
+                alert("Could not create passkey");
+            }
+        }
+
+    };
+
+    async function registerNewCredential(newCredential) {
+        // Move data into Arrays incase it is super long
+        let attestationObject = new Uint8Array(newCredential.response.attestationObject);
+        let clientDataJSON = new Uint8Array(newCredential.response.clientDataJSON);
+        let rawId = new Uint8Array(newCredential.rawId);
+
+        const data = {
+            id: newCredential.id,
+            rawId: coerceToBase64Url(rawId),
+            type: newCredential.type,
+            extensions: newCredential.getClientExtensionResults(),
+            response: {
+                AttestationObject: coerceToBase64Url(attestationObject),
+                clientDataJson: coerceToBase64Url(clientDataJSON)
+            }
+        };
+
+        let response;
+        try {
+            let res = await registerCredentialWithServer(data);
+
+            if (res.ok == true) {
+
+                alert("Passkey saved successfully");
+            } else {
+
+                alert("Could not create passkey");
+            }
+        } catch (e) {
+            alert("Could not create passkey");
+        }
+
+
+
+    }
+
+    async function registerCredentialWithServer(formData) {
+        let response = await fetch('/Fido2/RegisterResponse', {
+            method: 'POST', // or 'PUT'
+            body: JSON.stringify(formData), // data can be `string` or {object}!
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            }
+        });
+
+        //let data = await response.json();
+
+        return response;
+    }
+
+    function coerceToBase64Url(input) {
+        // Array or ArrayBuffer to Uint8Array
+        if (Array.isArray(input)) {
+            input = Uint8Array.from(input);
+        }
+
+        if (input instanceof ArrayBuffer) {
+            input = new Uint8Array(input);
+        }
+
+        // Uint8Array to base64
+        if (input instanceof Uint8Array) {
+            var str = "";
+            var len = input.byteLength;
+
+            for (var i = 0; i < len; i++) {
+                str += String.fromCharCode(input[i]);
+            }
+            input = window.btoa(str);
+        }
+
+        if (typeof input !== "string") {
+            throw new Error("could not coerce to string");
+        }
+
+        // base64 to base64url
+        // NOTE: "=" at the end of challenge is optional, strip it off here
+        input = input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=*$/g, "");
+
+        return input;
+    }
+
+    function base64ToArrayBuffer(base64) {
+        var binaryString = atob(base64);
+        var bytes = new Uint8Array(binaryString.length);
+        for (var i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+</script>

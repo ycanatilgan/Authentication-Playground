@@ -4,8 +4,11 @@ using Fido2Identity;
 using Fido2NetLib;
 using Fido2NetLib.Objects;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json.Linq;
 using System.Text;
+using System.Threading;
 using UAParser;
 
 namespace Authentication_Playground_.Controllers
@@ -39,16 +42,26 @@ namespace Authentication_Playground_.Controllers
         #endregion
 
         #region Forms & Requests
+        #region REGISTER PASSKEY
         [HttpPost]
         public IActionResult RegisterRequest()
         {
             if (HttpContext.Session.GetInt32("UserId").HasValue)
             {
-                Users? user = _dbContext.Users.Where(s => s.Id == HttpContext.Session.GetInt32("UserId").Value).Select(s => new Users
+                Users? user = _dbContext.Users.Where(s => s.Id == HttpContext.Session.GetInt32("UserId").Value).FirstOrDefault();
+
+                if (user == null)
+                    return BadRequest();
+
+                if(user.UserHandle == null)
                 {
-                    UserHandle = s.UserHandle,
-                    Username = s.Username
-                }).FirstOrDefault();
+                    byte[] userIdBytes = new byte[32];
+                    new Random().NextBytes(userIdBytes);
+                    string userIdStr = Convert.ToBase64String(userIdBytes);
+
+                    user.UserHandle = userIdStr;
+                    _dbContext.SaveChanges();
+                }
 
                 var userHandle = Convert.FromBase64String(user.UserHandle);
 
@@ -60,7 +73,7 @@ namespace Authentication_Playground_.Controllers
                 };
 
                 // 2. Get user existing keys by user
-                var items = fido2Storage.GetCredentialsByUserHandle(userHandle);
+                var items = fido2Storage.GetCredentialsByUsername(user.Username);
                 var existingKeys = new List<PublicKeyCredentialDescriptor>();
                 foreach (var publicKeyCredentialDescriptor in items)
                 {
@@ -79,7 +92,7 @@ namespace Authentication_Playground_.Controllers
                 var exts = new AuthenticationExtensionsClientInputs() { Extensions = true };
 
                 var options = _lib.RequestNewCredential(fidoUser, existingKeys, authenticatorSelection, AttestationConveyancePreference.Direct, exts);
-                options.Rp = new PublicKeyCredentialRpEntity("localhost:44373", "YcanInDev", null);
+                options.Rp = new PublicKeyCredentialRpEntity("localhost", "YcanInDev", null);
 
                 List<PubKeyCredParam> pubKeyCredParams = new List<PubKeyCredParam>
                 {
@@ -96,7 +109,7 @@ namespace Authentication_Playground_.Controllers
             else
             {
                 Response.StatusCode = 401;
-                return Redirect("Login");
+                return Json("Unauthorized");
             }
         }
 
@@ -111,7 +124,14 @@ namespace Authentication_Playground_.Controllers
                     var options = CredentialCreateOptions.FromJson(jsonOptions);
 
                     // 2. Create callback so that lib can verify credential id is unique to this user
-                    IsCredentialIdUniqueToUserAsyncDelegate callback = IsCredentialIdUniqueToUserAsyncDelegate;
+                    async Task<bool> callback(IsCredentialIdUniqueToUserParams args, CancellationToken token)
+                    {
+                        var users = await fido2Storage.GetUsersByCredentialIdAsync(args.CredentialId);
+                        if (users.Count > 0) 
+                            return false;
+
+                        return true;
+                    };
 
                     // 2. Verify and make the credentials
                     var success = await _lib.MakeNewCredentialAsync(attestationResponse, options, callback);
@@ -143,47 +163,109 @@ namespace Authentication_Playground_.Controllers
                     });
 
                     // 4. return "ok" to the client
-
-                    //var user = await accountManager.(options.User.Name);
-                    // await _userManager.GetUserAsync(User);
-
-                    /*if (user == null)
-                    {
-                        Response.StatusCode = 500;
-                        return Json(new CredentialMakeResult { Status = "error", ErrorMessage = $"Unable to load user with ID '{_userManager.GetUserId(User)}'." });
-                    }*/
-
-                    //await _userManager.SetTwoFactorEnabledAsync(user, true);
-                    //var userId = await _userManager.FindByNameAsync(user);
-
                     return Ok();
                 }
                 else
                 {
-                    return Unauthorized();
+                    Response.StatusCode = 401;
+                    return Json("Unauthorized");
                 }
             }
             catch (Exception ex)
             {
-                return BadRequest(ex.Message);
+                Response.StatusCode = 500;
+                return Json("Unexpected error");
             }
 
         }
+        #endregion
 
-        public async Task<bool> IsCredentialIdUniqueToUserAsyncDelegate(IsCredentialIdUniqueToUserParams credentialIdUserHandleParams, CancellationToken cancellationToken)
+        #region SIGN IN WITH PASS KEY
+        [HttpPost]
+        public async Task<JsonResult> SignInRequest()
         {
-            // Implement your logic here
-            // This method should return a Task<bool>
-            var userList = await fido2Storage.GetUsersByCredentialIdAsync(credentialIdUserHandleParams.CredentialId);
+            var existingCredentials = new List<PublicKeyCredentialDescriptor>();
 
-            foreach (var user in userList)
-            {
-                if (user.Id != credentialIdUserHandleParams.User.Id)
-                    return false;
-            }
+            var exts = new AuthenticationExtensionsClientInputs() { Extensions = true };
+            
+            // 3. Create options
+            var uv = UserVerificationRequirement.Required;
+            var options = _lib.GetAssertionOptions(
+                existingCredentials,
+                uv,
+                exts
+            );
 
-            return true;
+            options.RpId = "localhost";
+
+            // 4. Temporarily store options, session/in-memory cache/redis/db
+            HttpContext.Session.SetString("fido2.assertionOptions", options.ToJson());
+
+            // 5. Return options to client
+            return Json(options);
         }
+
+        [HttpPost]
+        public async Task<IActionResult> VerifyWebAuthn([FromBody] AuthenticatorAssertionRawResponse clientResponse, CancellationToken cancellationToken)
+        {
+
+            try
+            {
+                var jsonOptions = HttpContext.Session.GetString("fido2.assertionOptions");
+                var options = AssertionOptions.FromJson(jsonOptions);
+
+                // 2. Get registered credential from database
+                var creds = await fido2Storage.GetCredentialById(clientResponse.Id);
+
+                if (creds == null)
+                {
+                    TempData["Unsuccessful"] = "Bilinmeyen kimlik bilgileri";
+                    return Unauthorized();
+                }
+
+                // 3. Get credential counter from database
+                var storedCounter = creds.SignatureCounter;
+
+                // 4. Create callback to check if userhandle owns the credentialId
+                async Task<bool> callback(IsUserHandleOwnerOfCredentialIdParams args, CancellationToken token)
+                {
+                    var storedCreds = await fido2Storage.GetCredentialsByUserHandleAsync(args.UserHandle);
+                    return storedCreds.Exists(c => c.Descriptor.Id.SequenceEqual(args.CredentialId));
+                }
+
+                // 5. Make the assertion
+                var res = await _lib.MakeAssertionAsync(clientResponse, options, creds.PublicKey, storedCounter, callback);
+
+                var userHandleFromRequest = Convert.ToBase64String(creds.UserHandle);
+
+                var user = _dbContext.Users.Where(s => s.UserHandle == userHandleFromRequest).Select(s => new Users
+                {
+                    Id = s.Id,
+                    UserHandle = s.UserHandle,
+                    Username = s.Username
+                }).FirstOrDefault();
+
+                if (user == null || string.IsNullOrEmpty(user.UserHandle))
+                {
+                    ViewBag.SigninMessage = "User not found";
+                    return View("Login");
+                }
+
+                // 6. Store the updated counter
+                await fido2Storage.UpdateCounter(res.CredentialId, res.Counter);
+
+                HttpContext.Session.SetString("Username", user.Username);
+                HttpContext.Session.SetInt32("UserId", user.Id);
+
+                return Redirect("~/Home/Index");
+            }
+            catch (Exception ex)
+            {
+                ViewBag.SigninMessage = "Your passkey could not be verified";
+                return View("Login");
+            }
+        }
+        #endregion
         #endregion
 
         #region Private Functions

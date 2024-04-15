@@ -5,10 +5,10 @@
 
 <h1>@ViewData["Title"]</h1>
 
-@if (!string.IsNullOrEmpty(ViewBag.MFAError))
+@if (!string.IsNullOrEmpty(ViewBag.MFAMessage))
 {
     <div class="alert alert-info w-100" role="alert">
-        @ViewBag.MFAError
+        @ViewBag.MFAMessage
     </div>
 }
 

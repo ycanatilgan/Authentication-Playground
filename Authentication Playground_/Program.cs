@@ -13,7 +13,7 @@ builder.Services.AddSession();
 #region FIDO2
 var fido2Configuration = new Fido2Configuration
 {
-    ServerDomain = "localhost:44373",
+    ServerDomain = "localhost",
     ServerName = "ycan in dev",
     Origin = "https://localhost:44373",
     TimestampDriftTolerance = 300000,

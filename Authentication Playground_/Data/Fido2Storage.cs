@@ -19,9 +19,9 @@ namespace Fido2Identity
             _dbContext = dbContext;
         }
 
-        public List<FidoStoredCredential> GetCredentialsByUserHandle(byte[] UserHandle)
+        public List<FidoStoredCredential> GetCredentialsByUsername(string username)
         {
-            return _dbContext.FidoStoredCredentials.Where(c => c.UserHandle == UserHandle).ToList();
+            return _dbContext.FidoStoredCredentials.Where(c => c.Username == username).ToList();
         }
 
         public async Task RemoveCredentialsByUsername(string username)
