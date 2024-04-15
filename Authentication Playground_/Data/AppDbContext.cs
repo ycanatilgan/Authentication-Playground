@@ -11,5 +11,6 @@ namespace Authentication_Playground_.Data
         }
 
         public DbSet<Users> Users { get; set; }
+        public DbSet<FidoStoredCredential> FidoStoredCredentials { get; set; }
     }
 }

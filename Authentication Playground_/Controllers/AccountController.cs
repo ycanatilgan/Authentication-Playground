@@ -9,7 +9,9 @@ namespace Authentication_Playground_.Controllers
 {
     public class AccountController : Controller
     {
-        //For the tutorial, refer to http://ycanindev.com 
+        //For the tutorial, refer to https://ycanindev.com 
+
+        #region Initializers and  variables
         AppDbContext _dbContext;
 
         private readonly byte[] key;
@@ -23,7 +25,9 @@ namespace Authentication_Playground_.Controllers
             //YOU CAN CREATE A RANDOM 32 byte key here: https://www.avast.com/random-password-generator
             key = Encoding.UTF8.GetBytes("pKjvjST5-oC+nDrz?sghX5GHo-cl4Obn");
         }
+        #endregion
 
+        #region Views
         //Register page
         public IActionResult Register()
         {
@@ -41,7 +45,9 @@ namespace Authentication_Playground_.Controllers
         {
             return View();
         }
+        #endregion
 
+        #region Forms & Requests
         //User Management page, where they can set MFA Secret
         public IActionResult Management()
         {
@@ -112,6 +118,8 @@ namespace Authentication_Playground_.Controllers
                     //side. You can give them a special session value that confirms they have entered-
                     //their password correctly and can login only by entering their 2-step code
                     //You can find more info in: http://ycanindev.com
+                    //We also add a counter to the session, we will check it later to limit the
+                    //attempts via single login.
                     HttpContext.Session.SetInt32("OTPUserId", user.Id);
                     HttpContext.Session.SetInt32("OTPCounter", 3);
                     return View("MFAVerification");
@@ -257,7 +265,9 @@ namespace Authentication_Playground_.Controllers
                 return Redirect("Login");
             }
         }
+        #endregion
 
+        #region Private Functions
         private string Encrypt(string input)
         {
             using (Aes aes = Aes.Create())
@@ -323,5 +333,6 @@ namespace Authentication_Playground_.Controllers
                 }
             }
         }
+        #endregion
     }
 }
